@@ -1,0 +1,12 @@
+{
+  "name":"rummy-500",
+  "version":"1.0.0",
+  "private":true,
+  "type":"module",
+  "scripts":{
+    "test:unit":"node --test tests/engine.test.mjs tests/simulation.test.mjs",
+    "test:ui":"playwright test",
+    "test":"npm run test:unit && npm run test:ui"
+  },
+  "devDependencies":{"@playwright/test":"^1.55.0"}
+}
