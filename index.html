@@ -1,0 +1,107 @@
+<!doctype html>
+<html lang="pl">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+  <meta name="theme-color" content="#08110d">
+  <meta name="rummy500-signaling-url" content="">
+  <title>Remik 500</title>
+  <link rel="stylesheet" href="styles.css">
+</head>
+<body>
+  <div id="app" class="app-shell">
+    <header class="topbar">
+      <div class="brand-block">
+        <div class="eyebrow">KLASYCZNY REMIK · 2–7 GRACZY</div>
+        <div class="brand">REMIK <span>500</span></div>
+      </div>
+      <div id="hudStats" class="hud-stats"></div>
+      <div class="top-actions">
+        <button class="icon-button" id="rulesButton" title="Zasady">?</button>
+        <button class="icon-button" id="menuButton" title="Menu">☰</button>
+      </div>
+    </header>
+
+    <main class="workspace">
+      <aside class="side-panel">
+        <div class="panel-head">
+          <div><div class="eyebrow">PANEL STOŁU</div><h2>Pomocnik</h2></div>
+          <span id="modeBadge" class="badge">OFFLINE</span>
+        </div>
+        <div class="tabs">
+          <button class="tab active" data-tab="turn">Tura</button>
+          <button class="tab" data-tab="score">Wyniki</button>
+          <button class="tab" data-tab="log">Dziennik</button>
+        </div>
+        <div id="panelTurn" class="tab-page active"></div>
+        <div id="panelScore" class="tab-page"></div>
+        <div id="panelLog" class="tab-page log-page"></div>
+      </aside>
+
+      <section class="table-stage" aria-label="Stół do Remika 500">
+        <div id="opponents" class="opponents"></div>
+        <div class="felt-watermark">500</div>
+        <div class="table-center">
+          <section class="pile-zone stock-zone">
+            <div class="zone-label">STOS</div>
+            <button id="stockPile" class="stock-pile card-back" aria-label="Dobierz ze stosu"><span id="stockCount"></span></button>
+            <button id="endStockButton" class="mini-action hidden">Zakończ rozdanie</button>
+          </section>
+
+          <section class="pile-zone discard-zone">
+            <div class="zone-label">ODRZUCONE · KLIKNIJ WYBRANĄ KARTĘ</div>
+            <div id="discardFan" class="discard-fan" aria-label="Stos odrzuconych"></div>
+          </section>
+
+          <section class="meld-zone">
+            <div class="zone-label">UKŁADY NA STOLE</div>
+            <div id="melds" class="melds"></div>
+          </section>
+        </div>
+
+        <div class="local-area">
+          <div class="local-meta">
+            <div id="localPlayerPlate" class="player-plate local"></div>
+            <div id="turnMessage" class="turn-message"></div>
+          </div>
+          <div id="hand" class="hand" aria-label="Twoje karty"></div>
+          <div class="action-dock">
+            <button id="meldButton" class="action primary">Wyłóż zaznaczone</button>
+            <button id="discardButton" class="action">Odrzuć zaznaczoną</button>
+            <button id="clearSelectionButton" class="action ghost">Wyczyść</button>
+            <button id="sortButton" class="action ghost">Sortuj: kolor</button>
+          </div>
+        </div>
+      </section>
+    </main>
+  </div>
+
+  <div id="mainMenu" class="overlay menu-overlay open">
+    <div class="wood-frame">
+      <section class="menu-card">
+        <div class="brand-medal">♠</div>
+        <div class="eyebrow centered">PREMIUM DIGITAL CARD ROOM</div>
+        <h1>REMIK <span>500</span></h1>
+        <p>Klasyczna punktowana odmiana remika z otwartym stosem odrzuconych.</p>
+        <div class="menu-settings">
+          <label><span>Liczba miejsc</span><select id="singlePlayers"><option>2</option><option>3</option><option selected>4</option><option>5</option><option>6</option><option>7</option></select></label>
+          <label><span>Poziom botów</span><select id="botDifficulty"><option value="easy">Spokojny</option><option value="normal" selected>Normalny</option><option value="hard">Mocny</option></select></label>
+        </div>
+        <div class="menu-buttons">
+          <button id="singleButton" class="menu-button primary"><b>♣</b><span>Gra jednoosobowa</span><i>›</i></button>
+          <button id="multiplayerButton" class="menu-button"><b>◉</b><span>Multiplayer online</span><i>›</i></button>
+          <button id="menuRulesButton" class="menu-button"><b>?</b><span>Jak grać</span><i>›</i></button>
+        </div>
+        <small>Single-player działa bez usługi sieciowej. Multiplayer wymaga HTTPS i sygnalizacji WebRTC.</small>
+      </section>
+    </div>
+  </div>
+
+  <div id="genericModal" class="overlay hidden" role="dialog" aria-modal="true"><section class="modal-card" id="genericModalCard"></section></div>
+  <div id="multiplayerModal" class="overlay hidden" role="dialog" aria-modal="true"></div>
+  <div id="disconnectOverlay" class="overlay hidden"><section class="modal-card compact"><div class="eyebrow">POŁĄCZENIE UTRACONE</div><h2>Gra została wstrzymana</h2><p id="disconnectText">Jeden z graczy opuścił stół.</p><button class="action primary" id="disconnectMenuButton">Wróć do menu</button></section></div>
+  <div id="toast" class="toast" aria-live="polite"></div>
+
+  <script type="module" src="src/app.js"></script>
+</body>
+</html>
