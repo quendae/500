@@ -12,7 +12,7 @@ function playGame(playerCount, seed){
   while(s.phase!=='gameEnd' && actions<30000 && rounds<80){
     if(s.phase==='roundEnd'){ rounds++; executePlayerAction(s,s.currentPlayer,'next-round',{},rng); continue; }
     const seat=s.currentPlayer;
-    const move=chooseBotAction(s,seat,'hard');
+    const move=chooseBotAction(s,seat,'hard',rng);
     assert.ok(move,`no move p${playerCount} seat${seat} phase${s.phase}`);
     let r=executePlayerAction(s,seat,move.action,move.payload,rng);
     if(r?.code?.startsWith('AMBIGUOUS_')) r=executePlayerAction(s,seat,move.action,{...move.payload,optionKey:r.options[0].key},rng);
