@@ -21,7 +21,7 @@ function savedSession(){try{const raw=localStorage.getItem(SAVE_KEY);if(!raw)ret
 function saveSession(){if(mode!=='single'||!state)return;try{localStorage.setItem(SAVE_KEY,JSON.stringify({version:1,mode:'single',savedAt:Date.now(),state,botDifficultyBySeat,sortMode}))}catch{}}
 function clearSavedSession(){try{localStorage.removeItem(SAVE_KEY)}catch{}}
 function hasLiveGame(){return mode!=='idle'&&!!getView()}
-function updateContinueButton(){const b=$('#continueButton'),info=$('#continueInfo');if(!b)return;const live=hasLiveGame(),save=!live?savedSession():null,available=live||!!save;b.classList.toggle('hidden',!available);if(info){info.classList.toggle('hidden',!available);if(live)info.textContent=mode==='single'?'Bieżąca gra jest wstrzymana.':'Połączenie ze stołem pozostaje aktywne.';else if(save){const d=new Date(save.savedAt);info.textContent=`Zapis lokalny · ${save.state.playerCount} graczy · runda ${save.state.round} · ${d.toLocaleString('pl-PL',{dateStyle:'short',timeStyle:'short'})}`}}}
+function updateContinueButton(){const b=$('#continueButton'),info=$('#continueInfo'),single=$('#singleButton'),singleLabel=single?.querySelector('span');if(!b)return;const live=hasLiveGame(),save=!live?savedSession():null,available=live||!!save;b.hidden=!available;b.classList.toggle('hidden',!available);b.style.display=available?'grid':'none';b.setAttribute('aria-hidden',String(!available));if(singleLabel)singleLabel.textContent=available?'Nowa gra jednoosobowa':'Gra jednoosobowa';if(info){info.hidden=!available;info.classList.toggle('hidden',!available);info.style.display=available?'block':'none';if(live)info.textContent=mode==='single'?'Bieżąca gra jest wstrzymana.':'Połączenie ze stołem pozostaje aktywne.';else if(save){const d=new Date(save.savedAt);info.textContent=`Zapis lokalny · ${save.state.playerCount} graczy · runda ${save.state.round} · ${d.toLocaleString('pl-PL',{dateStyle:'short',timeStyle:'short'})}`}}}
 function pauseToMenu(){clearTimeout(botTimer);openMenu();updateContinueButton()}
 function continueGame(){const live=hasLiveGame();if(!live){const save=savedSession();if(!save)return;state=save.state;visibleState=null;localSeat=0;mode='single';botDifficultyBySeat=save.botDifficultyBySeat||{};sortMode=save.sortMode||'suit';selected.clear();shownRoundKey='';fxSnapshot=null;unlockAudio();render()}closeMenu();scheduleAuthority()}
 function reducedMotion(){return !!window.matchMedia?.('(prefers-reduced-motion: reduce)').matches}
@@ -76,6 +76,7 @@ $('#genericModal').addEventListener('click',async e=>{
 
 async function startSingle(){
   if(multiplayer.isActive())await multiplayer.leave();
+  clearSavedSession();
   const playerCount=Number($('#singlePlayers').value),difficulty=$('#botDifficulty').value;const names=['Ty',...Array.from({length:playerCount-1},(_,i)=>`Bot ${i+1}`)];const types=['human',...Array(playerCount-1).fill('bot')];botDifficultyBySeat=Object.fromEntries(Array.from({length:playerCount-1},(_,i)=>[i+1,difficulty]));
   state=createGame({playerCount,names,types,targetScore:500});visibleState=null;localSeat=0;mode='single';selected.clear();shownRoundKey='';fxSnapshot=null;unlockAudio();closeMenu();render();scheduleAuthority();
 }
