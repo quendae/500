@@ -22,20 +22,24 @@ jobs:
         run: |
           npm install --no-save --no-package-lock esbuild@0.25.9
           npx esbuild src/app.js --bundle --format=iife --target=es2020 --minify --outfile=/tmp/rummy500-bundle.js
-      - name: Replace only the inline app block
+      - name: Rebuild inline app tail safely
         run: |
           node <<'NODE'
           const fs = require('fs');
           const path = 'index.html';
-          let html = fs.readFileSync(path, 'utf8');
-          let js = fs.readFileSync('/tmp/rummy500-bundle.js', 'utf8');
-          js = js.replace(/<\/script/gi, '<\\/script');
-          const marker = /<script id="rummy500-app">[\s\S]*?<\/script>/;
-          if (!marker.test(html)) throw new Error('Inline app marker not found');
-          html = html.replace(marker, `<script id="rummy500-app">\n${js}\n</script>`);
-          if (/src\/app\.js/.test(html)) throw new Error('External app reference remains in standalone HTML');
-          if (!/<style id="rummy500-styles">/.test(html)) throw new Error('Inline CSS marker missing');
-          fs.writeFileSync(path, html);
+          const html = fs.readFileSync(path, 'utf8');
+          let js = fs.readFileSync('/tmp/rummy500-bundle.js', 'utf8').replace(/<\/script/gi, '<\\/script');
+          const open = '<script id="rummy500-app">';
+          const start = html.indexOf(open);
+          const end = html.lastIndexOf('</script>');
+          if (start < 0 || end < start) throw new Error('Inline app boundaries not found');
+          const prefix = html.slice(0, start);
+          const suffix = html.slice(end + '</script>'.length);
+          const output = `${prefix}${open}\n${js}\n</script>${suffix}`;
+          if (/src\/app\.js/.test(output)) throw new Error('External app reference remains in standalone HTML');
+          if (!/<style id="rummy500-styles">/.test(output)) throw new Error('Inline CSS marker missing');
+          if ((output.match(/<script id="rummy500-app">/g) || []).length !== 1) throw new Error('Unexpected inline app count');
+          fs.writeFileSync(path, output);
           NODE
       - name: Commit repaired standalone HTML
         run: |
