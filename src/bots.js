@@ -1,6 +1,6 @@
 import { cardBaseValue, executePlayerAction, legalDeepPickup, layoffOptions, meldOptions, RuleError } from './engine.js';
 
-export function chooseBotAction(state, seat, difficulty = 'normal') {
+export function chooseBotAction(state, seat, difficulty = 'normal', rng = Math.random) {
   if (state.currentPlayer !== seat) return null;
   const player = state.players[seat];
   if (state.phase === 'draw') {
@@ -12,9 +12,9 @@ export function chooseBotAction(state, seat, difficulty = 'normal') {
       return { action:'end-stock', payload:{} };
     }
     const deep = bestDeepPickup(state, seat);
-    if (deep != null && (difficulty !== 'easy' || Math.random() < 0.55)) return { action:'draw-discard', payload:{ index:deep } };
+    if (deep != null && (difficulty !== 'easy' || rng() < 0.55)) return { action:'draw-discard', payload:{ index:deep } };
     const top = state.discard.at(-1);
-    if (top && cardImmediatelyUseful(state, seat, top) && Math.random() < (difficulty === 'hard' ? 0.9 : 0.7)) return { action:'draw-discard', payload:{ index:state.discard.length - 1 } };
+    if (top && cardImmediatelyUseful(state, seat, top) && rng() < (difficulty === 'hard' ? 0.9 : 0.7)) return { action:'draw-discard', payload:{ index:state.discard.length - 1 } };
     return { action:'draw-stock', payload:{} };
   }
   if (state.phase !== 'play') return null;
@@ -25,9 +25,9 @@ export function chooseBotAction(state, seat, difficulty = 'normal') {
   }
 
   const lay = bestLayoff(state, seat);
-  if (lay) return lay;
+  if (lay && !strandsForbiddenPickup(state, seat, lay)) return lay;
   const meld = bestMeld(state, seat);
-  if (meld) return meld;
+  if (meld && !strandsForbiddenPickup(state, seat, meld)) return meld;
 
   const discard = chooseDiscard(state, seat);
   if (discard) return { action:'discard', payload:{ cardId:discard.id } };
@@ -37,7 +37,7 @@ export function chooseBotAction(state, seat, difficulty = 'normal') {
 export function runBotTurn(state, seat, difficulty = 'normal', rng = Math.random, maxActions = 50) {
   let actions = 0;
   while (state.currentPlayer === seat && !['roundEnd','gameEnd'].includes(state.phase) && actions++ < maxActions) {
-    const move = chooseBotAction(state, seat, difficulty);
+    const move = chooseBotAction(state, seat, difficulty, rng);
     if (!move) throw new Error('Bot deadlock');
     try {
       let result = executePlayerAction(state, seat, move.action, move.payload, rng);
@@ -50,6 +50,19 @@ export function runBotTurn(state, seat, difficulty = 'normal', rng = Math.random
     }
   }
   if (actions >= maxActions) throw new Error('Bot action limit exceeded');
+}
+
+
+function strandsForbiddenPickup(state, seat, move) {
+  const forbidden = state.cannotDiscardId;
+  if (!forbidden) return false;
+  const hand = state.players[seat].hand;
+  const used = new Set(move.action === 'layoff' ? [move.payload.cardId] : (move.payload.cardIds || []));
+  const remaining = hand.filter(c => !used.has(c.id));
+  // Going out by laying/melding the whole hand is legal. Otherwise the bot must
+  // preserve at least one card other than the just-picked top discard for discard.
+  if (!remaining.length) return false;
+  return remaining.every(c => c.id === forbidden);
 }
 
 function bestDeepPickup(state, seat) {
