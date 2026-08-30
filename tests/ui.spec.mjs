@@ -8,8 +8,10 @@ for(const viewport of sizes){
     await expect(page.locator('#mainMenu')).toBeVisible();await page.selectOption('#singlePlayers','7');await page.click('#singleButton');
     await expect(page.locator('.table-stage')).toBeVisible();await expect(page.locator('#hand')).toBeVisible();await expect(page.locator('#menuButton')).toBeVisible();
     await page.waitForTimeout(700);
-    const metrics=await page.evaluate(()=>({sw:document.documentElement.scrollWidth,cw:document.documentElement.clientWidth,hand:document.querySelector('#hand')?.getBoundingClientRect(),table:document.querySelector('.table-stage')?.getBoundingClientRect()}));
-    expect(metrics.sw).toBeLessThanOrEqual(metrics.cw+2);expect(metrics.hand.width).toBeGreaterThan(150);expect(metrics.table.width).toBeGreaterThan(300);
+    const metrics=await page.evaluate(()=>{const cards=[...document.querySelectorAll('#hand .card')],dock=document.querySelector('.action-dock');return{sw:document.documentElement.scrollWidth,cw:document.documentElement.clientWidth,hand:document.querySelector('#hand')?.getBoundingClientRect(),table:document.querySelector('.table-stage')?.getBoundingClientRect(),cardBottom:Math.max(0,...cards.map(card=>card.getBoundingClientRect().bottom)),dockTop:dock?.getBoundingClientRect().top}});
+    expect(metrics.sw).toBeLessThanOrEqual(metrics.cw+2);expect(metrics.hand.width).toBeGreaterThan(150);expect(metrics.table.width).toBeGreaterThan(300);expect(metrics.cardBottom).toBeLessThanOrEqual(metrics.dockTop+1);
   });
 }
 test('rules modal and core controls are reachable',async({page})=>{const errors=[];page.on('pageerror',error=>errors.push(error.stack||error.message));await page.goto('/');await assertNoPageErrors(page,errors);await page.click('#menuRulesButton');await expect(page.locator('#genericModal')).toBeVisible();await expect(page.locator('#genericModalCard')).toContainText('Jak grać');});
+
+test('sound toggle is available and persistent in UI',async({page})=>{await page.goto('/');const button=page.locator('#soundButton');await expect(button).toBeVisible();await expect(button).toHaveAttribute('aria-pressed','true');await button.click();await expect(button).toHaveAttribute('aria-pressed','false');await button.click();await expect(button).toHaveAttribute('aria-pressed','true');});
