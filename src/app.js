@@ -1,0 +1,139 @@
+import { createGame, executePlayerAction, meldOptions, layoffOptions, publicStateForSeat, cardLabel, suitSymbol, RuleError } from './engine.js';
+import { chooseBotAction } from './bots.js';
+import { createMultiplayer } from './multiplayer.js';
+
+let state=null,visibleState=null,localSeat=0,mode='idle',sortMode='suit',selected=new Set(),botDifficultyBySeat={},botTimer=null,shownRoundKey='';
+const $=s=>document.querySelector(s);
+const handEl=$('#hand'), discardEl=$('#discardFan'), meldsEl=$('#melds'), opponentsEl=$('#opponents');
+
+const ERRORS={NOT_YOUR_TURN:'To nie jest Twoja tura.',MUST_DRAW_FIRST:'Najpierw dobierz kartę.',MUST_PLAY_OR_DISCARD:'Najpierw zakończ bieżącą turę.',INVALID_MELD:'Te karty nie tworzą prawidłowego układu.',INVALID_LAYOFF:'Tej karty nie można dołożyć do wybranego układu.',MUST_USE_PICKUP_CARD:'Najgłębsza karta zabrana ze stosu odrzuconych musi zostać natychmiast wyłożona.',CANNOT_REDISCARD_TOP_PICKUP:'Nie możesz od razu odrzucić tej samej karty zabranej z wierzchu stosu.',ILLEGAL_DEEP_PICKUP:'Nie możesz zabrać tych kart — najgłębszej wybranej karty nie da się od razu wyłożyć.',CARD_NOT_OWNED:'Nie masz tej karty.',STOCK_NOT_EMPTY:'Stos dobierania nie jest pusty.'};
+
+const multiplayer=createMultiplayer({
+  getState:()=>state,
+  stateForSeat:(s,seat)=>publicStateForSeat(s,seat),
+  onHostStart:cfg=>{
+    mode='multi-host';localSeat=0;botDifficultyBySeat=cfg.botDifficulties||{};state=createGame({playerCount:cfg.playerCount,names:cfg.names,types:cfg.types,targetScore:500});visibleState=null;selected.clear();closeMenu();render();scheduleAuthority();
+  },
+  onGuestStart:seat=>{mode='multi-guest';localSeat=seat;state=null;visibleState=null;selected.clear();closeMenu();render();},
+  onGuestState:(view,seat)=>{mode='multi-guest';localSeat=seat;visibleState=view;selected.forEach(id=>{if(!view.players[seat]?.hand.some(c=>c.id===id))selected.delete(id)});closeMenu();render();},
+  onRemoteAction:(seat,action,payload)=>{if(!state)return {ok:false,code:'NO_GAME'};const r=executePlayerAction(state,seat,action,payload);render();return r;},
+  onAfterBroadcast:()=>scheduleAuthority(),
+  onError:msg=>toast(msg),
+  describeError:err=>describeError(err),
+  onDisconnect:msg=>showDisconnect(msg),
+  onLeave:()=>returnToMenu(false)
+});
+
+$('#singleButton').addEventListener('click',startSingle);
+$('#multiplayerButton').addEventListener('click',()=>multiplayer.open());
+$('#menuRulesButton').addEventListener('click',showRules);
+$('#rulesButton').addEventListener('click',showRules);
+$('#menuButton').addEventListener('click',()=>returnToMenu(true));
+$('#disconnectMenuButton').addEventListener('click',async()=>{await multiplayer.leave();$('#disconnectOverlay').classList.add('hidden');returnToMenu(false)});
+$('#stockPile').addEventListener('click',()=>perform('draw-stock'));
+$('#endStockButton').addEventListener('click',()=>perform('end-stock'));
+$('#meldButton').addEventListener('click',meldSelected);
+$('#discardButton').addEventListener('click',discardSelected);
+$('#clearSelectionButton').addEventListener('click',()=>{selected.clear();render()});
+$('#sortButton').addEventListener('click',()=>{sortMode=sortMode==='suit'?'rank':'suit';render()});
+
+discardEl.addEventListener('click',e=>{const card=e.target.closest('[data-discard-index]');if(card)perform('draw-discard',{index:Number(card.dataset.discardIndex)})});
+handEl.addEventListener('click',e=>{const card=e.target.closest('[data-card-id]');if(!card)return;const id=card.dataset.cardId;if(selected.has(id))selected.delete(id);else selected.add(id);render()});
+meldsEl.addEventListener('click',async e=>{const m=e.target.closest('[data-meld-id]');if(!m||selected.size!==1)return;const view=getView();if(!view)return;const card=view.players[localSeat]?.hand.find(c=>c.id===[...selected][0]);if(!card)return;const opts=layoffOptions(view,m.dataset.meldId,card);if(!opts.length){toast('Tej karty nie można dołożyć do tego układu.');return}const option=opts.length===1?opts[0]:await chooseOption('Gdzie ma trafić karta?',opts);if(!option)return;perform('layoff',{cardId:card.id,meldId:m.dataset.meldId,optionKey:option.key})});
+
+document.querySelectorAll('.tab').forEach(btn=>btn.addEventListener('click',()=>{document.querySelectorAll('.tab').forEach(x=>x.classList.toggle('active',x===btn));document.querySelectorAll('.tab-page').forEach(x=>x.classList.remove('active'));$(`#panel${cap(btn.dataset.tab)}`).classList.add('active')}));
+
+$('#genericModal').addEventListener('click',async e=>{
+  if(e.target===e.currentTarget||e.target.closest('[data-modal-close]'))closeGeneric();
+  if(e.target.closest('[data-next-round]')){const o=$('#genericModal');delete o.dataset.locked;o.classList.add('hidden');shownRoundKey='';await perform('next-round')}
+  if(e.target.closest('[data-new-game]')){closeGeneric();returnToMenu(true)}
+});
+
+function startSingle(){
+  const playerCount=Number($('#singlePlayers').value),difficulty=$('#botDifficulty').value;const names=['Ty',...Array.from({length:playerCount-1},(_,i)=>`Bot ${i+1}`)];const types=['human',...Array(playerCount-1).fill('bot')];botDifficultyBySeat=Object.fromEntries(Array.from({length:playerCount-1},(_,i)=>[i+1,difficulty]));
+  state=createGame({playerCount,names,types,targetScore:500});visibleState=null;localSeat=0;mode='single';selected.clear();shownRoundKey='';closeMenu();render();scheduleAuthority();
+}
+
+function getView(){return mode==='multi-guest'?visibleState:state}
+function isAuthority(){return mode==='single'||mode==='multi-host'}
+function canLocalAct(view=getView()){return !!view&&view.currentPlayer===localSeat&&!['roundEnd','gameEnd'].includes(view.phase)&&!(multiplayer.debug().paused)}
+
+async function perform(action,payload={}){
+  const view=getView();if(!view&&action!=='next-round')return;
+  if(mode==='multi-guest'){
+    if(action==='next-round')return toast('Nowe rozdanie uruchamia gospodarz.');
+    if(!multiplayer.sendAction(action,payload))toast('Kanał z gospodarzem nie jest gotowy.');return;
+  }
+  if(!state)return;
+  try{
+    const result=executePlayerAction(state,localSeat,action,payload);
+    if(result?.ok===false){toast(result.code||'Ruch wymaga dodatkowego wyboru.');return result}
+    selected.clear();render();
+    if(mode==='multi-host')multiplayer.afterHostAction();else scheduleAuthority();
+    return result;
+  }catch(err){toast(describeError(err));return {ok:false,error:err}}
+}
+
+async function meldSelected(){
+  const view=getView();if(!view||selected.size<3)return toast('Zaznacz co najmniej 3 karty.');const hand=view.players[localSeat]?.hand||[];const cards=[...selected].map(id=>hand.find(c=>c.id===id)).filter(Boolean);const options=meldOptions(cards);if(!options.length)return toast('Zaznaczone karty nie tworzą układu.');const option=options.length===1?options[0]:await chooseOption('Wybierz interpretację układu',options);if(!option)return;perform('meld',{cardIds:cards.map(c=>c.id),optionKey:option.key});
+}
+function discardSelected(){if(selected.size!==1)return toast('Zaznacz dokładnie jedną kartę do odrzucenia.');perform('discard',{cardId:[...selected][0]})}
+
+function scheduleAuthority(){
+  clearTimeout(botTimer);if(!isAuthority()||!state||['roundEnd','gameEnd'].includes(state.phase))return;const p=state.players[state.currentPlayer];if(p?.type!=='bot')return;
+  botTimer=setTimeout(()=>{
+    try{const seat=state.currentPlayer,move=chooseBotAction(state,seat,botDifficultyBySeat[seat]||'normal');if(!move)throw new Error('Bot nie znalazł ruchu.');let r=executePlayerAction(state,seat,move.action,move.payload);if(r?.code?.startsWith('AMBIGUOUS_'))r=executePlayerAction(state,seat,move.action,{...move.payload,optionKey:r.options[0].key});render();if(mode==='multi-host')multiplayer.afterHostAction();else scheduleAuthority();}
+    catch(err){console.error(err);toast(`Błąd bota: ${describeError(err)}`)}
+  },260);
+}
+
+function render(){
+  const view=getView();renderMode();if(!view){renderEmpty();return}renderHud(view);renderPlayers(view);renderCenter(view);renderHand(view);renderPanel(view);renderRoundModal(view);
+}
+function renderMode(){$('#modeBadge').textContent=mode==='single'?'SINGLE':mode==='multi-host'?'ONLINE · HOST':mode==='multi-guest'?'ONLINE · GOŚĆ':'OFFLINE'}
+function renderEmpty(){$('#hudStats').innerHTML='';opponentsEl.innerHTML='';handEl.innerHTML='';discardEl.innerHTML='';meldsEl.innerHTML='<div class="status-card"><p>Oczekiwanie na stan gry…</p></div>';$('#localPlayerPlate').innerHTML='';$('#turnMessage').textContent='Łączenie ze stołem…'}
+function renderHud(v){const phase=phaseName(v.phase);$('#hudStats').innerHTML=[['ROZDANIE',v.round],['FAZA',phase],['STOS',v.stock.length],['CEL',`${v.targetScore} pkt`]].map(([l,val],i)=>`<div class="hud-stat ${i===1?'active':''}"><small>${l}</small><b>${val}</b></div>`).join('')}
+function phaseName(p){return p==='draw'?'Dobieranie':p==='play'?'Wykładanie':p==='roundEnd'?'Koniec rozdania':p==='gameEnd'?'Koniec gry':'Przygotowanie'}
+function renderPlayers(v){
+  const seats=[];for(let i=1;i<v.playerCount;i++)seats.push((localSeat+i)%v.playerCount);opponentsEl.innerHTML=seats.map(seat=>plate(v.players[seat],v.currentPlayer===seat,false)).join('');$('#localPlayerPlate').innerHTML=plateInner(v.players[localSeat],v.currentPlayer===localSeat,true);$('#localPlayerPlate').classList.toggle('active',v.currentPlayer===localSeat)
+}
+function plate(p,active,local){return `<div class="player-plate ${active?'active':''}">${plateInner(p,active,local)}</div>`}
+function plateInner(p,active,local){if(!p)return '';const count=p.hand?.length||0;return `<div class="plate-top"><span class="avatar">${esc(initials(p.name))}</span><span class="name">${esc(p.name)}</span><span class="plate-score">${p.score} pkt</span></div><small>${local?'Twój fotel':p.type==='bot'?'Bot':'Gracz'} · ${count} kart</small>${local?'':`<div class="mini-hand">${Array.from({length:Math.min(count,7)},()=>'<i class="mini-back"></i>').join('')}<span class="card-count">${count>7?`+${count-7}`:''}</span></div>`}`}
+function renderCenter(v){
+  $('#stockCount').textContent=`${v.stock.length} kart`;const localTurn=canLocalAct(v);$('#stockPile').disabled=!(localTurn&&v.phase==='draw'&&v.stock.length);$('#endStockButton').classList.toggle('hidden',!(localTurn&&v.phase==='draw'&&!v.stock.length));
+  discardEl.innerHTML=v.discard.map((c,i)=>cardHTML(c,{discardIndex:i,clickable:localTurn&&v.phase==='draw'})).join('');requestAnimationFrame(()=>{discardEl.scrollLeft=discardEl.scrollWidth});
+  meldsEl.innerHTML=v.melds.length?v.melds.map(m=>meldHTML(v,m)).join(''):'<div class="status-card"><p>Brak układów. Set: 3–4 karty tej samej rangi. Sekwens: min. 3 kolejne karty jednego koloru.</p></div>';
+}
+function meldHTML(v,m){return `<div class="meld" data-meld-id="${m.id}"><div class="meld-head"><span>${m.kind==='set'?'GRUPA':'SEKWENS'}</span><span>${esc(v.players[m.createdBy]?.name||'')}</span></div><div class="meld-cards">${m.entries.map(e=>cardHTML(e.card,{small:true,owner:e.ownerSeat,jokerMap:e.card.joker&&m.kind==='run'?rankFromNum(e.representedRank)+suitSymbol(m.suit):''})).join('')}</div></div>`}
+function renderHand(v){
+  const p=v.players[localSeat];if(!p){handEl.innerHTML='';return}const cards=sortCards([...p.hand]);const n=cards.length;handEl.innerHTML=cards.map((c,i)=>{const rot=Math.max(-10,Math.min(10,(i-(n-1)/2)*1.25));const drop=Math.abs(i-(n-1)/2)*.45;return cardHTML(c,{hand:true,selected:selected.has(c.id),required:v.pendingPickup?.cardId===c.id,style:`--rot:${rot}deg;--drop:${drop}px`})}).join('');
+  const active=canLocalAct(v),play=active&&v.phase==='play';$('#meldButton').disabled=!(play&&selected.size>=3);$('#discardButton').disabled=!(play&&selected.size===1&&!v.pendingPickup);$('#clearSelectionButton').disabled=!selected.size;$('#sortButton').textContent=`Sortuj: ${sortMode==='suit'?'kolor':'ranga'}`;
+  let message;if(v.phase==='roundEnd'||v.phase==='gameEnd')message='Rozdanie zakończone.';else if(v.currentPlayer!==localSeat)message=`Ruch: ${v.players[v.currentPlayer]?.name}`;else if(v.phase==='draw')message=v.stock.length?'Dobierz ze stosu albo z odrzuconych.':'Stos pusty — dobierz z odrzuconych albo zakończ rozdanie.';else if(v.pendingPickup)message=`Wyłóż oznaczoną kartę (${cardLabel(p.hand.find(c=>c.id===v.pendingPickup.cardId))}).`;else message='Możesz wykładać, dokładać do układów lub odrzucić kartę.';$('#turnMessage').textContent=message;$('#turnMessage').classList.toggle('hot',v.currentPlayer===localSeat)
+}
+function renderPanel(v){
+  const p=v.players[v.currentPlayer];let title='Oczekiwanie',text='';if(v.phase==='draw'){title=`${p?.name}: dobieranie`;text='Można dobrać kartę z zakrytego stosu albo wybraną kartę ze stosu odrzuconych. Przy doborze z głębi trzeba natychmiast wyłożyć najgłębszą zabraną kartę.'}else if(v.phase==='play'){title=`${p?.name}: wykładanie`;text=v.pendingPickup?'Najgłębsza zabrana karta musi teraz wejść do nowego lub istniejącego układu.':'Po dobraniu można tworzyć układy i dokładać karty. Turę kończy odrzucenie jednej karty.'}else{text='Rozdanie zostało zakończone i podliczone.'}
+  $('#panelTurn').innerHTML=`<div class="status-card"><div class="eyebrow">AKTUALNA TURA</div><strong>${esc(title)}</strong><p>${esc(text)}</p></div><div class="status-card"><div class="eyebrow">PODPOWIEDŹ</div><p>Zaznacz 3+ karty i wybierz „Wyłóż”. Aby dołożyć pojedynczą kartę, zaznacz ją i kliknij wybrany układ na stole.</p></div>`;
+  $('#panelScore').innerHTML=v.players.map((x,i)=>`<div class="score-row ${i===v.currentPlayer?'active':''}"><span>${esc(x.name)}</span><span>${x.score} pkt</span></div>`).join('');
+  $('#panelLog').innerHTML=[...v.log].slice(-80).reverse().map(x=>`<div class="log-item">${esc(x.text)}</div>`).join('');
+}
+function renderRoundModal(v){if(!['roundEnd','gameEnd'].includes(v.phase)||!v.lastRound)return;const key=`${v.round}:${v.phase}:${v.revision}`;if(shownRoundKey===key)return;shownRoundKey=key;const winner=v.phase==='gameEnd'?v.players[v.winner]:null;const rows=v.lastRound.results.map(r=>`<tr><td>${esc(v.players[r.seat].name)}</td><td>+${r.melded}</td><td>−${r.handPenalty}</td><td class="${r.delta>=0?'positive':'negative'}">${r.delta>=0?'+':''}${r.delta}</td><td>${r.total}</td></tr>`).join('');const guest=mode==='multi-guest';openGeneric(`<div class="eyebrow">${winner?'KONIEC GRY':'KONIEC ROZDANIA'}</div><h2>${winner?`${esc(winner.name)} wygrywa!`:`Rozdanie ${v.round} podliczone`}</h2><table class="round-table"><thead><tr><th>Gracz</th><th>Wyłożone</th><th>Ręka</th><th>Runda</th><th>Razem</th></tr></thead><tbody>${rows}</tbody></table>${winner?'<button class="action primary" data-new-game>Nowa gra</button>':guest?'<p>Oczekiwanie, aż gospodarz rozpocznie kolejne rozdanie.</p>':'<button class="action primary" data-next-round>Następne rozdanie</button>'}`,false)}
+
+function cardHTML(c,o={}){if(!c||c.hidden)return `<div class="card-back" ${o.style?`style="${o.style}"`:''}></div>`;const cls=c.joker?'joker':c.suit==='H'?'red':c.suit==='D'?'blue':c.suit==='C'?'green':'';const attrs=[o.hand?`data-card-id="${c.id}"`:'',Number.isInteger(o.discardIndex)?`data-discard-index="${o.discardIndex}"`:'',o.style?`style="${o.style}"`:''].filter(Boolean).join(' ');const stateCls=[o.hand?'selectable':'',o.selected?'selected':'',o.required?'required':''].join(' ');if(c.joker)return `<div class="card ${cls} ${stateCls}" ${attrs}><div class="rank">★</div><div class="pip">J</div><div class="bottom-corner">★</div>${o.jokerMap?`<span class="joker-map">${esc(o.jokerMap)}</span>`:''}${o.owner!=null?'<i class="owner-dot"></i>':''}</div>`;const sym=suitSymbol(c.suit);return `<div class="card ${cls} ${stateCls}" ${attrs}><div><div class="rank">${c.rank}</div><div class="corner">${sym}</div></div><div class="pip">${sym}</div><div class="bottom-corner"><div class="rank">${c.rank}</div><div class="corner">${sym}</div></div>${o.owner!=null?'<i class="owner-dot"></i>':''}</div>`}
+function sortCards(cards){const suitOrder={C:0,D:1,H:2,S:3};const rankOrder={A:1,'2':2,'3':3,'4':4,'5':5,'6':6,'7':7,'8':8,'9':9,'10':10,J:11,Q:12,K:13,JOKER:99};return cards.sort((a,b)=>sortMode==='suit'?((suitOrder[a.suit]??9)-(suitOrder[b.suit]??9)||rankOrder[a.rank]-rankOrder[b.rank]):(rankOrder[a.rank]-rankOrder[b.rank]||(suitOrder[a.suit]??9)-(suitOrder[b.suit]??9)))}
+
+function showRules(){openGeneric(`<header class="modal-head"><div><div class="eyebrow">ZASADY STOŁU</div><h2>Jak grać w Remika 500</h2></div><button class="modal-close" data-modal-close>×</button></header><ol class="rules-list"><li>Gra dla 2–7 osób. Przy 2 graczach rozdaje się po 13 kart, przy 3+ po 7.</li><li>Twórz <b>grupy</b> 3–4 kart tej samej rangi albo <b>sekwensy</b> co najmniej 3 kolejnych kart jednego koloru. As może być niski lub wysoki, ale bez zawijania K–A–2.</li><li>Jokery są dzikie i przy wyłożeniu otrzymują stałe znaczenie. Gdy interpretacji jest kilka, gra poprosi o wybór.</li><li>Na początku tury dobierz z zakrytego stosu albo ze stosu odrzuconych. Możesz sięgnąć w głąb, ale bierzesz także wszystkie karty leżące nad wybraną i musisz natychmiast wyłożyć tę najgłębszą.</li><li>Możesz dokładać karty do własnych i cudzych układów; punkty za dokładane karty zostają przy graczu, który je dołożył.</li><li>Turę kończy odrzucenie. Jeśli dobrałeś tylko wierzchnią kartę odrzuconych, nie możesz jej natychmiast odrzucić z powrotem.</li><li>Punkty: 2–10 według wartości, J/Q/K po 10, As i Joker po 15; niski As w sekwensie A–2–3… jest wart 1. Od wyłożonych punktów odejmuje się wartość kart pozostałych w ręce.</li><li>Partia kończy się po rozdaniu, w którym ktoś osiągnie co najmniej 500; wygrywa najwyższy wynik. Remis na prowadzeniu oznacza kolejne rozdanie.</li></ol><p><small>Wersja stołowa używa wariantu bez dodatkowej reakcji „Rummy!” poza normalną kolejnością tur.</small></p>`)}
+function chooseOption(title,options){return new Promise(resolve=>{const overlay=$('#genericModal'),card=$('#genericModalCard');overlay.classList.remove('hidden');card.innerHTML=`<div class="eyebrow">WYBÓR UKŁADU</div><h2>${esc(title)}</h2><p>Joker może reprezentować różne karty. Wybierz interpretację, która ma zostać zapamiętana.</p><div class="choice-grid">${options.map((o,i)=>`<button class="action ${i===0?'primary':''}" data-choice="${esc(o.key)}">${esc(o.label)}</button>`).join('')}</div><button class="action ghost" data-choice-cancel>Anuluj</button>`;const handler=e=>{const b=e.target.closest('[data-choice],[data-choice-cancel]');if(!b)return;overlay.removeEventListener('click',handler);overlay.classList.add('hidden');resolve(b.dataset.choice?options.find(o=>o.key===b.dataset.choice):null)};overlay.addEventListener('click',handler)})}
+function openGeneric(html,closable=true){const o=$('#genericModal');$('#genericModalCard').innerHTML=html;o.classList.remove('hidden');if(!closable)o.dataset.locked='1';else delete o.dataset.locked}
+function closeGeneric(){const o=$('#genericModal');if(o.dataset.locked==='1')return;o.classList.add('hidden')}
+function showDisconnect(msg){$('#disconnectText').textContent=msg;$('#disconnectOverlay').classList.remove('hidden')}
+function closeMenu(){$('#mainMenu').classList.remove('open');$('#mainMenu').classList.add('hidden')}
+function openMenu(){$('#mainMenu').classList.remove('hidden');$('#mainMenu').classList.add('open')}
+async function returnToMenu(leaveNetwork){clearTimeout(botTimer);if(leaveNetwork&&multiplayer.isActive())await multiplayer.leave();state=null;visibleState=null;mode='idle';localSeat=0;selected.clear();botDifficultyBySeat={};shownRoundKey='';$('#disconnectOverlay').classList.add('hidden');$('#genericModal').classList.add('hidden');openMenu();render()}
+function describeError(err){if(err instanceof RuleError)return ERRORS[err.code]||err.code;return ERRORS[err?.code]||String(err?.message||err||'Nieprawidłowy ruch.')}
+let toastTimer;function toast(message){const el=$('#toast');el.textContent=message;el.classList.add('show');clearTimeout(toastTimer);toastTimer=setTimeout(()=>el.classList.remove('show'),2600)}
+function esc(v){const d=document.createElement('div');d.textContent=String(v??'');return d.innerHTML}
+function cap(s){return s.charAt(0).toUpperCase()+s.slice(1)}
+function initials(name){return String(name||'?').split(/\s+/).slice(0,2).map(x=>x[0]).join('').toUpperCase()}
+function rankFromNum(n){return n===1||n===14?'A':n===11?'J':n===12?'Q':n===13?'K':String(n)}
+
+render();
