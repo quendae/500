@@ -1,0 +1,55 @@
+name: Build standalone HTML
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - index.html
+      - styles.css
+      - src/**
+      - .github/workflows/build-standalone-html.yml
+
+permissions:
+  contents: write
+
+jobs:
+  bundle:
+    if: github.actor != 'github-actions[bot]'
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+      - name: Bundle JavaScript
+        run: |
+          npm install --no-save --no-package-lock esbuild@0.25.9
+          npx esbuild src/app.js --bundle --format=iife --target=es2020 --minify --outfile=/tmp/rummy500-bundle.js
+      - name: Inline CSS and JavaScript
+        run: |
+          node <<'NODE'
+          const fs = require('fs');
+          const path = 'index.html';
+          let html = fs.readFileSync(path, 'utf8');
+          const css = fs.readFileSync('styles.css', 'utf8');
+          const js = fs.readFileSync('/tmp/rummy500-bundle.js', 'utf8');
+
+          html = html.replace(/\s*<link rel="stylesheet" href="styles\.css">\s*/, `\n  <style id="rummy500-styles">\n${css}\n  </style>\n`);
+          html = html.replace(/\s*<script type="module" src="src\/app\.js"><\/script>\s*/, `\n  <script id="rummy500-app">\n${js}\n  </script>\n`);
+
+          if (!html.includes('id="rummy500-styles"') || !html.includes('id="rummy500-app"')) {
+            throw new Error('Standalone HTML injection failed');
+          }
+          fs.writeFileSync(path, html);
+          NODE
+      - name: Commit standalone index
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add index.html
+          if git diff --cached --quiet; then
+            echo "No generated changes"
+            exit 0
+          fi
+          git commit -m "Bundle frontend into standalone HTML"
+          git push
